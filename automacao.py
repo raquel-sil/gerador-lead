@@ -22,7 +22,7 @@ UNIPILE_DSN = os.getenv("UNIPILE_DSN")
 UNIPILE_API_KEY = os.getenv("UNIPILE_API_KEY")
 UNIPILE_ACCOUNT_ID = os.getenv("UNIPILE_ACCOUNT_ID")
 
-MAX_ENVIOS_DIA = int(os.getenv("MAX_ENVIOS_DIA", "1"))
+# Sem contagem no HubSpot, o limite por execução é controlado pelo lote.
 LOTE_POR_EXECUCAO = int(os.getenv("LOTE_POR_EXECUCAO", "1"))
 PAUSA_ENTRE_EMAILS = float(os.getenv("PAUSA_ENTRE_EMAILS", "30"))
 TEMPO_MAXIMO_SEGUNDOS = int(os.getenv("TEMPO_MAXIMO_SEGUNDOS", "200"))
@@ -132,19 +132,8 @@ def buscar_empresa_hubspot_id(dominio):
     return r[0]["id"] if r else None
 
 
-def envios_hoje_hubspot():
-    """Conta contatos com envio_data de hoje (UTC), incluindo 'incerto'."""
-    inicio = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    payload = {"filterGroups": [{"filters": [
-        {"propertyName": "envio_data", "operator": "GTE", "value": int(inicio.timestamp() * 1000)}
-    ]}], "limit": 1}
-    res = hubspot_request("POST", f"{HUBSPOT_BASE}/crm/v3/objects/contacts/search", json=payload)
-    if res.status_code != 200:
-        raise RuntimeError(f"Contagem diária falhou [{res.status_code}]: {res.text[:300]}")
-    return res.json().get("total", 0)
-
-
-def criar_contato_reservado(c):
+def criar_contato(c):
+    """Cria o contato só com campos padrão do HubSpot. Retorna o ID."""
     payload = {"properties": {
         "email": c["email"],
         "firstname": c["nome"],
@@ -152,35 +141,19 @@ def criar_contato_reservado(c):
         "jobtitle": c["cargo"],
         "hs_linkedin_url": c["linkedin"],
         "hubspot_owner_id": JOEL_OWNER_ID,
-        "envio_status": "reservado",
-        "envio_data": int(datetime.now(timezone.utc).timestamp() * 1000),
-        "convite_status": "pendente",
     }}
     res = hubspot_request("POST", f"{HUBSPOT_BASE}/crm/v3/objects/contacts", json=payload)
     if res.status_code == 201:
         return res.json().get("id")
     if res.status_code == 409:
-        return None
-    raise RuntimeError(f"Criação de {c['email']} falhou [{res.status_code}]: {res.text[:300]}")
+        return buscar_contato_hubspot_id(c["email"])
+    print(f"Erro ao criar contato [{res.status_code}]: {res.text[:300]}")
+    return None
 
 
-def atualizar_contato(contact_id, propriedades):
-    res = hubspot_request("PATCH", f"{HUBSPOT_BASE}/crm/v3/objects/contacts/{contact_id}",
-                          json={"properties": propriedades})
-    if res.status_code not in (200, 201):
-        print(f"Aviso: contato {contact_id} não atualizado [{res.status_code}]")
-
-
-def arquivar_contato(contact_id):
-    res = hubspot_request("DELETE", f"{HUBSPOT_BASE}/crm/v3/objects/contacts/{contact_id}")
-    if res.status_code not in (200, 204):
-        print(f"Aviso: contato {contact_id} não arquivado [{res.status_code}]")
-
-
-def criar_empresa_hubspot(nome, dominio, num_funcionarios):
+def criar_empresa_hubspot(nome, dominio, num_funcionarios=None):
     payload = {"properties": {
         "name": nome, "domain": dominio,
-        "numberofemployees": str(num_funcionarios) if num_funcionarios else "",
         "hubspot_owner_id": JOEL_OWNER_ID, "lifecyclestage": "lead",
     }}
     res = hubspot_request("POST", f"{HUBSPOT_BASE}/crm/v3/objects/companies", json=payload)
@@ -367,9 +340,6 @@ def contatar_linkedin(linkedin_url, nome_contato, nome_empresa):
     return None
 
 
-STATUS_CONVITE = {"mensagem": "mensagem_enviada", "convite": "convite_enviado", None: "nao_enviado"}
-
-
 # =============================================================================
 # E-MAIL
 # =============================================================================
@@ -459,30 +429,38 @@ def espera_pausa(estado):
 # ORQUESTRAÇÃO
 # =============================================================================
 
+def obter_ou_criar_empresa(cache, nome, dominio):
+    """Retorna o ID da empresa no HubSpot, criando se necessário. Usa cache da execução."""
+    chave = f"empresa:{dominio}"
+    if chave not in cache:
+        company_id = buscar_empresa_hubspot_id(dominio) or criar_empresa_hubspot(nome, dominio)
+        cache[chave] = company_id
+    return cache[chave]
+
+
 def processar_contato(c, gmail, estado, cache):
     """Retorna 'enviado', 'ignorado', 'falhou' ou 'parar'."""
+    # Pula contato que já existe no HubSpot (checagem por e-mail, propriedade padrão)
     if buscar_contato_hubspot_id(c["email"]):
         return "ignorado"
 
+    # Pula domínios pessoais e empresas que já existem no HubSpot
     dominio = c["dominio"]
     if dominio in DOMINIOS_GENERICOS:
         return "ignorado"
-    if dominio not in cache:
-        cache[dominio] = "existente" if buscar_empresa_hubspot_id(dominio) else None
-    if cache[dominio] == "existente":
+    chave_existente = f"existente:{dominio}"
+    if chave_existente not in cache:
+        cache[chave_existente] = buscar_empresa_hubspot_id(dominio) is not None
+    if cache[chave_existente]:
         return "ignorado"
 
-    if estado["restantes"] <= 0:
-        return "parar"
     if tempo_esgotado(estado):
         return "parar"
 
-    contact_id = criar_contato_reservado(c)
-    if not contact_id:
-        return "ignorado"
-
+    # Convite ou mensagem no LinkedIn (não bloqueia o e-mail)
     acao_linkedin = contatar_linkedin(c["linkedin"], c["nome"], c["empresa"])
-    atualizar_contato(contact_id, {"convite_status": STATUS_CONVITE[acao_linkedin]})
+    if acao_linkedin:
+        print(f"LinkedIn: {acao_linkedin} enviado.")
 
     espera_pausa(estado)
     assunto = EMAIL_ASSUNTO.format(empresa=c["empresa"])
@@ -497,31 +475,29 @@ def processar_contato(c, gmail, estado, cache):
     except Exception as e:
         estado["ultimo_envio"] = time.monotonic()
         tipo = classificar_erro(e)
-        erro = f"{type(e).__name__}: {e}"
+        print(f"Falha ({tipo}) ao enviar: {type(e).__name__}: {e}")
         if tipo == "liberar":
-            arquivar_contato(contact_id)
-            estado["restantes"] = 0
             print("Cota atingida. Interrompendo a execução.")
             return "parar"
-        status = "incerto" if tipo == "incerto" else "falhou"
-        atualizar_contato(contact_id, {"envio_status": status, "envio_erro": erro[:500]})
-        print(f"Falha ({tipo}) ao enviar. Registrado no HubSpot.")
         return "falhou"
 
     estado["ultimo_envio"] = time.monotonic()
-    estado["restantes"] -= 1
-    atualizar_contato(contact_id, {"envio_status": "enviado", "envio_message_id": message_id})
-    print("E-mail enviado e registrado.")
+    estado["enviados"] += 1
+    print(f"E-mail enviado (msg {message_id}).")
 
+    # Depois do envio: registra no HubSpot. Erros aqui não desfazem o envio.
     try:
-        if c["empresa"] and dominio not in cache.get("_criadas", set()):
-            company_id = criar_empresa_hubspot(c["empresa"], dominio, 0)
-            cache.setdefault("_criadas", set()).add(dominio)
-        else:
-            company_id = buscar_empresa_hubspot_id(dominio)
+        contact_id = criar_contato(c)
+        if not contact_id:
+            print("Aviso: e-mail enviado, mas o contato não foi criado no HubSpot.")
+            return "enviado"
+
+        company_id = obter_ou_criar_empresa(cache, c["empresa"], dominio)
         if company_id:
             associar_contato_empresa(contact_id, company_id)
+
         registrar_email_enviado_no_hubspot(contact_id, assunto, corpo)
+
         task_id = criar_cadencia_tarefas_hubspot(
             contact_id, JOEL_OWNER_ID, c["nome"] or "(sem nome)", c["empresa"]
         )
@@ -538,13 +514,8 @@ def executar_automacao_apollo(limite_lote=None):
     validar_configuracao()
     lote = limite_lote or LOTE_POR_EXECUCAO
 
-    restantes = MAX_ENVIOS_DIA - envios_hoje_hubspot()
-    if restantes <= 0:
-        print("Limite diário já atingido.")
-        return {"enviados": 0, "motivo": "limite_diario"}
-
     gmail = criar_servico_gmail()
-    estado = {"inicio": time.monotonic(), "restantes": restantes, "ultimo_envio": None}
+    estado = {"inicio": time.monotonic(), "ultimo_envio": None, "enviados": 0}
     cache = {}
     enviados = 0
     pagina = 1
