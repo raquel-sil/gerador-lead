@@ -2,7 +2,7 @@ import os
 import re
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -31,11 +31,21 @@ MAX_PAGINAS_APOLLO = int(os.getenv("MAX_PAGINAS_APOLLO", "20"))
 HUBSPOT_BASE = "https://api.hubapi.com"
 APOLLO_CONTACTS_URL = "https://api.apollo.io/v1/contacts/search"
 
+FUSO_BRASIL = timezone(timedelta(hours=-3))
+
 # Linha de descadastro obrigatória em toda mensagem de prospecção.
 LINHA_DESCADASTRO = 'Se preferir não receber mais contatos nossos, basta responder este e-mail com a palavra "remover".'
 
-# Mensagem para conexões de primeiro grau. Enquanto começar com "[SUBSTITUIR", não envia.
-MENSAGEM_LINKEDIN_CONEXAO = "[SUBSTITUIR pela mensagem que o Joel vai enviar a conexões de primeiro grau]"
+# Mensagem para conexões de primeiro grau no LinkedIn.
+# Placeholders: {saudacao} e {empresa}.
+MENSAGEM_LINKEDIN_CONEXAO = (
+    "{saudacao}, tudo bem?\n\n"
+    "Obrigado por aceitar a conexão! 😊\n\n"
+    "Prazer, sou o Joel da Start RH, consultoria especializada em Recrutamento & Seleção.\n\n"
+    "Temos parceria com nomes como Porto Seguro, Natura e Cielo, e na Cielo foram mais de 1200 posições fechadas nos últimos meses.\n\n"
+    "Quero apresentar nosso projeto e mostrar como podemos apoiar a {empresa} nas demandas atuais ou futuras.\n\n"
+    "Podemos conversar por 15 minutos essa semana? Qual é o melhor dia e horário para você?"
+)
 
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -60,6 +70,21 @@ def headers_hubspot():
 
 def headers_apollo():
     return {"Cache-Control": "no-cache", "Content-Type": "application/json", "x-api-key": APOLLO_API_KEY}
+
+
+# =============================================================================
+# DATAS (DIAS ÚTEIS)
+# =============================================================================
+
+def proximo_dia_util(data, dias_uteis):
+    """Soma dias úteis (segunda a sexta) a partir de 'data'."""
+    atual = data
+    adicionados = 0
+    while adicionados < dias_uteis:
+        atual += timedelta(days=1)
+        if atual.weekday() < 5:  # 0 = segunda ... 4 = sexta
+            adicionados += 1
+    return atual
 
 
 # =============================================================================
@@ -193,7 +218,7 @@ def registrar_email_enviado_no_hubspot(contact_id, assunto, corpo_html):
 
 
 def criar_cadencia_tarefas_hubspot(contact_id, bdr_id, nome_lead, empresa_lead):
-    """Retorna o ID da tarefa 'Conexão - LinkedIn'."""
+    """Cria a cadência com vencimento em dias úteis, às 9h (Brasília). Retorna o ID da tarefa de conexão."""
     tarefas = [
         ("Conexão - LinkedIn", 1, "TODO", "NOT_STARTED"),
         ("Primeiro E-mail (Problema)", 1, "EMAIL", "COMPLETED"),
@@ -204,10 +229,12 @@ def criar_cadencia_tarefas_hubspot(contact_id, bdr_id, nome_lead, empresa_lead):
         ("WhatsApp - Só com Sinal Prévio", 15, "TODO", "NOT_STARTED"),
         ("Break Up E-mail - O Mais Poderoso da Cadência", 19, "EMAIL", "NOT_STARTED"),
     ]
-    agora = datetime.now(timezone.utc)
+
+    base = datetime.now(FUSO_BRASIL).replace(hour=9, minute=0, second=0, microsecond=0)
     task_conexao_id = None
-    for titulo, dias, tipo, status in tarefas:
-        venc = int((agora.timestamp() + dias * 86400) * 1000)
+
+    for titulo, dias_uteis, tipo, status in tarefas:
+        venc = int(proximo_dia_util(base, dias_uteis).timestamp() * 1000)
         payload = {
             "properties": {
                 "hs_task_subject": f"{titulo} | {nome_lead} ({empresa_lead})",
@@ -229,6 +256,7 @@ def criar_cadencia_tarefas_hubspot(contact_id, bdr_id, nome_lead, empresa_lead):
                 print(f"Erro ao criar tarefa '{titulo}' [{res.status_code}]")
         except Exception as e:
             print(f"Falha na API de Tarefas: {e}")
+
     return task_conexao_id
 
 
@@ -494,7 +522,9 @@ def processar_contato(c, gmail, estado, cache):
         if company_id:
             associar_contato_empresa(contact_id, company_id)
         registrar_email_enviado_no_hubspot(contact_id, assunto, corpo)
-        task_id = criar_cadencia_tarefas_hubspot(contact_id, JOEL_OWNER_ID, c["nome"] or "(sem nome)", c["empresa"])
+        task_id = criar_cadencia_tarefas_hubspot(
+            contact_id, JOEL_OWNER_ID, c["nome"] or "(sem nome)", c["empresa"]
+        )
         if acao_linkedin == "mensagem" and task_id:
             concluir_tarefa_hubspot(task_id)
     except Exception:
