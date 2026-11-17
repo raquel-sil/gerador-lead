@@ -33,8 +33,6 @@ APOLLO_CONTACTS_URL = "https://api.apollo.io/v1/contacts/search"
 
 FUSO_BRASIL = timezone(timedelta(hours=-3))
 
-# Linha de descadastro obrigatória em toda mensagem de prospecção.
-LINHA_DESCADASTRO = 'Se preferir não receber mais contatos nossos, basta responder este e-mail com a palavra "remover".'
 
 # Mensagem para conexões de primeiro grau no LinkedIn.
 # Placeholders: {saudacao} e {empresa}.
@@ -357,8 +355,6 @@ EMAIL_CORPO_HTML = """
 
 <p>Se não for, você consegue me passar o contato de quem cuida dessa parte?</p>
 
-<p>{descadastro}</p>
-
 <p>Aguardo o retorno.<br>Att,</p>
 
 <!-- INÍCIO ASSINATURA START RH -->
@@ -467,7 +463,6 @@ def processar_contato(c, gmail, estado, cache):
     corpo = EMAIL_CORPO_HTML.format(
         saudacao=montar_saudacao(c["nome"]),
         empresa=c["empresa"],
-        descadastro=LINHA_DESCADASTRO,
     )
 
     try:
