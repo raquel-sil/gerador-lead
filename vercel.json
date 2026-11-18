@@ -1,7 +1,4 @@
 {
-  "rewrites": [
-    { "source": "/", "destination": "/disparo.html" }
-  ],
   "functions": {
     "api/cron.py": { "maxDuration": 300 }
   }
