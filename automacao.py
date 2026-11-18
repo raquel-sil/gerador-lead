@@ -14,6 +14,7 @@ from gmail_sender import classificar_erro, criar_servico_gmail, enviar_email_gma
 
 HUBSPOT_ACCESS_TOKEN = os.getenv("HUBSPOT_ACCESS_TOKEN")
 APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
+APOLLO_LABEL_ID = os.getenv("APOLLO_LABEL_ID")  # opcional: se definido, usa só essa lista
 JOEL_OWNER_ID = os.getenv("JOEL_OWNER_ID", "90392568")
 JOEL_EMAIL_ADDRESS = os.getenv("JOEL_EMAIL_ADDRESS", "joel@startrh.io")
 
@@ -52,14 +53,6 @@ DOMINIOS_GENERICOS = {
     "yahoo.com.br", "icloud.com", "uol.com.br", "bol.com.br", "terra.com.br",
 }
 
-# Única trava de destinatário: só e-mails listados aqui podem receber envio.
-# Para liberar um lead, acrescente o e-mail em EMAILS_PERMITIDOS no Vercel.
-EMAILS_PERMITIDOS = {
-    e.strip().lower()
-    for e in os.getenv("EMAILS_PERMITIDOS", "").split(",")
-    if e.strip()
-}
-
 
 def validar_configuracao():
     faltando = [n for n in (
@@ -68,9 +61,6 @@ def validar_configuracao():
     ) if not os.getenv(n)]
     if faltando:
         raise RuntimeError("Variáveis não definidas: " + ", ".join(faltando))
-    if not EMAILS_PERMITIDOS:
-        # Sem essa trava, a execução percorreria toda a conta do Apollo.
-        raise RuntimeError("EMAILS_PERMITIDOS vazio: nenhum envio foi feito.")
 
 
 def headers_hubspot():
@@ -261,8 +251,10 @@ def email_valido(email):
 
 
 def buscar_contatos_apollo(pagina):
-    """Lê contatos da conta. O destinatário é filtrado depois, por EMAILS_PERMITIDOS."""
+    """Lê contatos do Apollo. Usa a lista (APOLLO_LABEL_ID) só se ela estiver definida."""
     payload = {"page": pagina, "per_page": 100}
+    if APOLLO_LABEL_ID:
+        payload["label_ids"] = [APOLLO_LABEL_ID]
     try:
         res = requests.post(APOLLO_CONTACTS_URL, headers=headers_apollo(), json=payload, timeout=30)
         if res.status_code == 200:
@@ -291,8 +283,6 @@ def normalizar_contato_apollo(bruto):
 
     email = (bruto.get("email") or "").strip().lower()
     if not email_valido(email):
-        return None
-    if email not in EMAILS_PERMITIDOS:
         return None
 
     dominio = email.split("@", 1)[1]
