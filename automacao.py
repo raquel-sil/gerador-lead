@@ -14,7 +14,7 @@ from gmail_sender import classificar_erro, criar_servico_gmail, enviar_email_gma
 
 HUBSPOT_ACCESS_TOKEN = os.getenv("HUBSPOT_ACCESS_TOKEN")
 APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
-APOLLO_LABEL_ID = os.getenv("APOLLO_LABEL_ID")  # opcional
+APOLLO_LABEL_ID = os.getenv("APOLLO_LABEL_ID")  # obrigatório: lista com os contatos permitidos
 JOEL_OWNER_ID = os.getenv("JOEL_OWNER_ID", "90392568")
 JOEL_EMAIL_ADDRESS = os.getenv("JOEL_EMAIL_ADDRESS", "joel@startrh.io")
 
@@ -22,7 +22,6 @@ UNIPILE_DSN = os.getenv("UNIPILE_DSN")
 UNIPILE_API_KEY = os.getenv("UNIPILE_API_KEY")
 UNIPILE_ACCOUNT_ID = os.getenv("UNIPILE_ACCOUNT_ID")
 
-# Sem contagem no HubSpot, o limite por execução é controlado pelo lote.
 LOTE_POR_EXECUCAO = int(os.getenv("LOTE_POR_EXECUCAO", "1"))
 PAUSA_ENTRE_EMAILS = float(os.getenv("PAUSA_ENTRE_EMAILS", "30"))
 TEMPO_MAXIMO_SEGUNDOS = int(os.getenv("TEMPO_MAXIMO_SEGUNDOS", "200"))
@@ -33,6 +32,8 @@ APOLLO_CONTACTS_URL = "https://api.apollo.io/v1/contacts/search"
 
 FUSO_BRASIL = timezone(timedelta(hours=-3))
 
+# Linha de descadastro (fica no e-mail; o usuário decide o texto final).
+LINHA_DESCADASTRO = 'Se preferir não receber mais contatos nossos, basta responder este e-mail com a palavra "remover".'
 
 # Mensagem para conexões de primeiro grau no LinkedIn.
 # Placeholders: {saudacao} e {empresa}.
@@ -55,7 +56,7 @@ DOMINIOS_GENERICOS = {
 
 def validar_configuracao():
     faltando = [n for n in (
-        "HUBSPOT_ACCESS_TOKEN", "APOLLO_API_KEY",
+        "HUBSPOT_ACCESS_TOKEN", "APOLLO_API_KEY", "APOLLO_LABEL_ID",
         "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN",
     ) if not os.getenv(n)]
     if faltando:
@@ -80,7 +81,7 @@ def proximo_dia_util(data, dias_uteis):
     adicionados = 0
     while adicionados < dias_uteis:
         atual += timedelta(days=1)
-        if atual.weekday() < 5:  # 0 = segunda ... 4 = sexta
+        if atual.weekday() < 5:
             adicionados += 1
     return atual
 
@@ -131,12 +132,13 @@ def buscar_empresa_hubspot_id(dominio):
 
 
 def criar_contato(c):
-    """Cria o contato só com campos padrão do HubSpot. Retorna o ID."""
+    """Cria o contato com campos padrão do HubSpot (inclui telefone, se houver). Retorna o ID."""
     payload = {"properties": {
         "email": c["email"],
         "firstname": c["nome"],
         "lastname": c["sobrenome"],
         "jobtitle": c["cargo"],
+        "phone": c["telefone"],
         "hs_linkedin_url": c["linkedin"],
         "hubspot_owner_id": JOEL_OWNER_ID,
     }}
@@ -249,9 +251,8 @@ def email_valido(email):
 
 
 def buscar_contatos_apollo(pagina):
-    payload = {"page": pagina, "per_page": 100}
-    if APOLLO_LABEL_ID:
-        payload["label_ids"] = [APOLLO_LABEL_ID]
+    """Lê contatos da lista salva (APOLLO_LABEL_ID). Sem a lista, não busca nada."""
+    payload = {"page": pagina, "per_page": 100, "label_ids": [APOLLO_LABEL_ID]}
     try:
         res = requests.post(APOLLO_CONTACTS_URL, headers=headers_apollo(), json=payload, timeout=30)
         if res.status_code == 200:
@@ -262,16 +263,33 @@ def buscar_contatos_apollo(pagina):
     return []
 
 
+def extrair_telefone(bruto):
+    """Primeiro telefone disponível. Vazio se o Apollo não liberou o número."""
+    numeros = bruto.get("phone_numbers") or []
+    if numeros:
+        primeiro = numeros[0] or {}
+        return primeiro.get("sanitized_number") or primeiro.get("raw_number") or ""
+    return bruto.get("sanitized_phone") or ""
+
+
 def normalizar_contato_apollo(bruto):
+    """Aceita só contato com e-mail verificado, não descadastrado e não excluído."""
+    if bruto.get("person_deleted") or bruto.get("email_unsubscribed"):
+        return None
+    if (bruto.get("email_status") or "").lower() != "verified":
+        return None
+
     email = (bruto.get("email") or "").strip().lower()
     if not email_valido(email):
         return None
+
     dominio = email.split("@", 1)[1]
     return {
         "email": email,
         "nome": bruto.get("first_name") or "",
         "sobrenome": bruto.get("last_name") or "",
         "cargo": bruto.get("title") or "",
+        "telefone": extrair_telefone(bruto),
         "linkedin": bruto.get("linkedin_url") or "",
         "empresa": bruto.get("organization_name") or dominio,
         "dominio": dominio,
@@ -355,6 +373,8 @@ EMAIL_CORPO_HTML = """
 
 <p>Se não for, você consegue me passar o contato de quem cuida dessa parte?</p>
 
+<p>{descadastro}</p>
+
 <p>Aguardo o retorno.<br>Att,</p>
 
 <!-- INÍCIO ASSINATURA START RH -->
@@ -436,11 +456,9 @@ def obter_ou_criar_empresa(cache, nome, dominio):
 
 def processar_contato(c, gmail, estado, cache):
     """Retorna 'enviado', 'ignorado', 'falhou' ou 'parar'."""
-    # Pula contato que já existe no HubSpot (checagem por e-mail, propriedade padrão)
     if buscar_contato_hubspot_id(c["email"]):
         return "ignorado"
 
-    # Pula domínios pessoais e empresas que já existem no HubSpot
     dominio = c["dominio"]
     if dominio in DOMINIOS_GENERICOS:
         return "ignorado"
@@ -453,7 +471,6 @@ def processar_contato(c, gmail, estado, cache):
     if tempo_esgotado(estado):
         return "parar"
 
-    # Convite ou mensagem no LinkedIn (não bloqueia o e-mail)
     acao_linkedin = contatar_linkedin(c["linkedin"], c["nome"], c["empresa"])
     if acao_linkedin:
         print(f"LinkedIn: {acao_linkedin} enviado.")
@@ -463,6 +480,7 @@ def processar_contato(c, gmail, estado, cache):
     corpo = EMAIL_CORPO_HTML.format(
         saudacao=montar_saudacao(c["nome"]),
         empresa=c["empresa"],
+        descadastro=LINHA_DESCADASTRO,
     )
 
     try:
@@ -480,7 +498,6 @@ def processar_contato(c, gmail, estado, cache):
     estado["enviados"] += 1
     print(f"E-mail enviado (msg {message_id}).")
 
-    # Depois do envio: registra no HubSpot. Erros aqui não desfazem o envio.
     try:
         contact_id = criar_contato(c)
         if not contact_id:
