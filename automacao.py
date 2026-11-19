@@ -1,5 +1,6 @@
 import os
 import re
+import unicodedata
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -358,6 +359,57 @@ def contatar_linkedin(linkedin_url, nome_contato, nome_empresa):
     return None
 
 
+def _normalizar_texto(texto):
+    texto = unicodedata.normalize("NFKD", texto or "").encode("ascii", "ignore").decode().lower()
+    return re.sub(r"\s+", " ", texto).strip()
+
+
+def buscar_linkedin_unipile(nome, sobrenome, empresa):
+    """
+    Procura o perfil pelo nome na conta do Joel (Unipile) e confirma a empresa
+    no título do perfil. Na dúvida, retorna vazio. Não usa créditos do Apollo.
+    """
+    if not (UNIPILE_DSN and UNIPILE_API_KEY and UNIPILE_ACCOUNT_ID):
+        return ""
+    nome_completo = _normalizar_texto(f"{nome} {sobrenome}")
+    empresa_norm = _normalizar_texto(empresa)
+    if not (nome_completo.strip() and empresa_norm):
+        return ""
+
+    try:
+        res = requests.post(
+            f"{unipile_base_url()}/linkedin/search",
+            params={"account_id": UNIPILE_ACCOUNT_ID},
+            headers={**unipile_headers(), "Content-Type": "application/json"},
+            json={"api": "classic", "category": "people", "keywords": f"{nome} {sobrenome}"},
+            timeout=30,
+        )
+    except Exception as e:
+        print(f"Unipile: busca falhou: {e}")
+        return ""
+
+    if res.status_code != 200:
+        print(f"Unipile: busca retornou [{res.status_code}]: {res.text[:200]}")
+        return ""
+
+    itens = res.json().get("items") or []
+    for item in itens:
+        nome_item = _normalizar_texto(f"{item.get('first_name', '')} {item.get('last_name', '')}")
+        if nome_item != nome_completo:
+            continue
+        texto_perfil = _normalizar_texto(f"{item.get('headline', '')} {item.get('company', '')}")
+        if empresa_norm not in texto_perfil:
+            continue
+        publico = item.get("public_identifier")
+        if publico:
+            return f"https://www.linkedin.com/in/{publico}"
+
+    if itens:
+        # Ajuda a conferir os nomes dos campos na primeira execução.
+        print(f"Unipile: nenhum perfil confirmou a empresa. Campos do 1º resultado: {list(itens[0].keys())}")
+    return ""
+
+
 # =============================================================================
 # E-MAIL
 # =============================================================================
@@ -472,6 +524,11 @@ def processar_contato(c, gmail, estado, cache):
 
     if tempo_esgotado(estado):
         return "parar"
+
+    if not c["linkedin"]:
+        c["linkedin"] = buscar_linkedin_unipile(c["nome"], c["sobrenome"], c["empresa"])
+        if c["linkedin"]:
+            print("LinkedIn encontrado via Unipile.")
 
     acao_linkedin = contatar_linkedin(c["linkedin"], c["nome"], c["empresa"])
     if acao_linkedin:
