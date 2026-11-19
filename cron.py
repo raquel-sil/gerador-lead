@@ -16,41 +16,106 @@ PAGINA_DISPARO = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Disparo de leads: Start RH</title>
+  <meta name="theme-color" content="#1a1830">
+  <title>Disparo de leads | StartRH</title>
   <style>
-    body { font-family: Arial, sans-serif; background: #f4f5f7; margin: 0; padding: 40px 16px; color: #1a1a1a; }
-    .card { background: #fff; max-width: 480px; margin: 0 auto; padding: 28px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-    h1 { font-size: 20px; margin: 0 0 6px; }
-    p.sub { font-size: 14px; color: #666; margin: 0 0 22px; }
-    label { display: block; font-size: 14px; font-weight: bold; margin: 16px 0 6px; }
-    input { width: 100%; padding: 10px; font-size: 15px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
-    button { width: 100%; margin-top: 22px; padding: 12px; font-size: 15px; font-weight: bold; color: #fff; background: #F5A623; border: none; border-radius: 6px; cursor: pointer; }
-    button:disabled { background: #bbb; cursor: not-allowed; }
-    .aviso { font-size: 13px; background: #fff7e6; border-left: 4px solid #F5A623; padding: 10px 12px; margin-top: 20px; border-radius: 4px; }
-    #resultado { margin-top: 20px; font-size: 14px; padding: 12px; border-radius: 6px; display: none; white-space: pre-wrap; }
-    #resultado.ok { display: block; background: #e8f7ee; color: #1b5e20; }
+    :root {
+      --azul: #1a1830;
+      --dourado: #F5A623;
+      --texto: #1a1a1a;
+      --cinza: #6b6b7b;
+      --borda: #d9d9e3;
+      --fundo: #f5f5f8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: var(--fundo);
+      color: var(--texto);
+      min-height: 100vh;
+    }
+    header {
+      background: var(--azul);
+      color: #fff;
+      padding: 18px 24px;
+      font-weight: bold;
+      letter-spacing: 0.3px;
+    }
+    header span { color: var(--dourado); }
+    main { padding: 40px 16px; }
+    .card {
+      background: #fff;
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 32px 28px;
+      border-radius: 12px;
+      box-shadow: 0 4px 18px rgba(26,24,48,0.08);
+      border-top: 4px solid var(--dourado);
+    }
+    h1 { font-size: 22px; margin: 0 0 6px; color: var(--azul); }
+    p.sub { font-size: 14px; color: var(--cinza); margin: 0 0 24px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 18px 0 6px; color: var(--azul); }
+    input {
+      width: 100%;
+      padding: 11px 12px;
+      font-size: 15px;
+      border: 1px solid var(--borda);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--texto);
+    }
+    input:focus { outline: none; border-color: var(--dourado); box-shadow: 0 0 0 3px rgba(245,166,35,0.2); }
+    button {
+      width: 100%;
+      margin-top: 24px;
+      padding: 13px;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--azul);
+      background: var(--dourado);
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { filter: brightness(1.05); }
+    button:disabled { background: #c9c9d4; color: #fff; cursor: not-allowed; }
+    .aviso {
+      font-size: 13px;
+      background: #fff8ea;
+      border-left: 4px solid var(--dourado);
+      padding: 12px 14px;
+      margin-top: 22px;
+      border-radius: 6px;
+      color: #5a4a1e;
+    }
+    #resultado { margin-top: 20px; font-size: 14px; padding: 14px; border-radius: 8px; display: none; white-space: pre-wrap; }
+    #resultado.ok { display: block; background: #e8f6ee; color: #1b5e20; }
     #resultado.erro { display: block; background: #fdecea; color: #8a1c1c; }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>Disparo de leads</h1>
-    <p class="sub">Escolha quantos leads quer processar agora.</p>
+  <header>Start<span>RH</span> &middot; Disparo de leads</header>
+  <main>
+    <div class="card">
+      <h1>Disparo de leads</h1>
+      <p class="sub">Escolha quantos leads quer processar agora.</p>
 
-    <label for="lote">Quantidade de leads</label>
-    <input type="number" id="lote" min="1" max="10" value="1">
+      <label for="lote">Quantidade de leads</label>
+      <input type="number" id="lote" min="1" max="10" value="1">
 
-    <label for="token">Senha de acesso</label>
-    <input type="password" id="token" autocomplete="off" placeholder="Digite a senha">
+      <label for="token">Senha de acesso</label>
+      <input type="password" id="token" autocomplete="off" placeholder="Digite a senha">
 
-    <button id="botao" onclick="disparar()">Disparar</button>
+      <button id="botao" onclick="disparar()">Disparar</button>
 
-    <div id="resultado"></div>
+      <div id="resultado"></div>
 
-    <div class="aviso">
-      Cada lead gera um e-mail real. Clique uma vez e espere o resultado antes de clicar de novo.
+      <div class="aviso">
+        Cada lead gera um e-mail real. Clique uma vez e espere o resultado antes de clicar de novo.
+      </div>
     </div>
-  </div>
+  </main>
 
   <script>
     async function disparar() {
