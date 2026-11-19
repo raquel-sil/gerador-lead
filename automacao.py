@@ -276,10 +276,8 @@ def extrair_telefone(bruto):
 
 
 def normalizar_contato_apollo(bruto):
-    """Aceita só contato com e-mail verificado, não descadastrado e não excluído."""
+    """Aceita contato com e-mail válido, não descadastrado e não excluído."""
     if bruto.get("person_deleted") or bruto.get("email_unsubscribed"):
-        return None
-    if (bruto.get("email_status") or "").lower() != "verified":
         return None
 
     email = (bruto.get("email") or "").strip().lower()
