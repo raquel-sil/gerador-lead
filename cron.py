@@ -141,7 +141,7 @@ PAGINA_DISPARO = """<!DOCTYPE html>
         } else if (!res.ok || !dados.ok) {
           mostrar("erro", `Erro: ${dados.erro || "falha na execução"}`);
         } else {
-          const motivos = Object.entries(dados.motivos || {}).map(([k, v]) => `  ${k}: ${v}`).join("\n");
+          const motivos = Object.entries(dados.motivos || {}).map(([k, v]) => `  ${k}: ${v}`).join("\\n");
           mostrar("ok", `Concluído.\nE-mails enviados: ${dados.enviados}\nPáginas lidas: ${dados.paginas}` + (motivos ? `\n\nMotivos de descarte:\n${motivos}` : ""));
         }
       } catch (e) {
