@@ -141,7 +141,8 @@ PAGINA_DISPARO = """<!DOCTYPE html>
         } else if (!res.ok || !dados.ok) {
           mostrar("erro", `Erro: ${dados.erro || "falha na execução"}`);
         } else {
-          mostrar("ok", `Concluído.\\nE-mails enviados: ${dados.enviados}\\nPáginas lidas: ${dados.paginas}`);
+          const motivos = Object.entries(dados.motivos || {}).map(([k, v]) => `  ${k}: ${v}`).join("\n");
+          mostrar("ok", `Concluído.\nE-mails enviados: ${dados.enviados}\nPáginas lidas: ${dados.paginas}` + (motivos ? `\n\nMotivos de descarte:\n${motivos}` : ""));
         }
       } catch (e) {
         mostrar("erro", "Não foi possível conectar. Verifique sua internet e tente de novo.");
