@@ -26,7 +26,7 @@ UNIPILE_ACCOUNT_ID = os.getenv("UNIPILE_ACCOUNT_ID")
 LOTE_POR_EXECUCAO = int(os.getenv("LOTE_POR_EXECUCAO", "1"))
 PAUSA_ENTRE_EMAILS = float(os.getenv("PAUSA_ENTRE_EMAILS", "30"))
 TEMPO_MAXIMO_SEGUNDOS = int(os.getenv("TEMPO_MAXIMO_SEGUNDOS", "200"))
-MAX_PAGINAS_APOLLO = int(os.getenv("MAX_PAGINAS_APOLLO", "20"))
+MAX_PAGINAS_APOLLO = int(os.getenv("MAX_PAGINAS_APOLLO", "500"))
 
 HUBSPOT_BASE = "https://api.hubapi.com"
 APOLLO_CONTACTS_URL = "https://api.apollo.io/v1/contacts/search"
@@ -585,6 +585,36 @@ def processar_contato(c, gmail, estado, cache):
     return "enviado"
 
 
+def contatos_ja_no_hubspot(emails):
+    """
+    Confere vários e-mails de uma vez no HubSpot (até 100 por chamada).
+    Retorna o conjunto dos que já existem, ou None se a consulta falhar
+    (nesse caso, a checagem individual de processar_contato continua valendo).
+    """
+    emails = list(dict.fromkeys(emails))[:100]
+    if not emails:
+        return set()
+    payload = {
+        "idProperty": "email",
+        "properties": ["email"],
+        "inputs": [{"id": e} for e in emails],
+    }
+    try:
+        res = hubspot_request("POST", f"{HUBSPOT_BASE}/crm/v3/objects/contacts/batch/read", json=payload)
+    except Exception as e:
+        print(f"HubSpot: checagem em lote falhou: {e}")
+        return None
+    if res.status_code not in (200, 207):
+        print(f"HubSpot: checagem em lote retornou [{res.status_code}]")
+        return None
+    existentes = set()
+    for r in res.json().get("results", []):
+        email = ((r.get("properties") or {}).get("email") or "").strip().lower()
+        if email:
+            existentes.add(email)
+    return existentes
+
+
 def executar_automacao_apollo(limite_lote=None):
     validar_configuracao()
     lote = limite_lote or LOTE_POR_EXECUCAO
@@ -594,20 +624,40 @@ def executar_automacao_apollo(limite_lote=None):
     cache = {}
     enviados = 0
     pagina = 1
+    paginas_lidas = 0
     parar = False
 
-    while enviados < lote and pagina <= MAX_PAGINAS_APOLLO and not parar:
+    # Continua página após página até achar contatos novos para o lote,
+    # ou até acabar a lista, o limite de páginas ou o tempo máximo.
+    while enviados < lote and paginas_lidas < MAX_PAGINAS_APOLLO and not parar:
+        if tempo_esgotado(estado):
+            estado["motivos"]["tempo_esgotado"] = 1
+            break
+
         contatos = buscar_contatos_apollo(pagina)
+        pagina += 1
+        paginas_lidas += 1
         if not contatos:
             break
+
+        candidatos = []
         for bruto in contatos:
-            if enviados >= lote:
-                break
             c = normalizar_contato_apollo(bruto)
             if not c:
                 estado["motivos"]["sem_email_valido_ou_excluido"] = (
                     estado["motivos"].get("sem_email_valido_ou_excluido", 0) + 1
                 )
+                continue
+            candidatos.append(c)
+
+        # Uma chamada ao HubSpot por página, em vez de uma por contato.
+        ja_no_hub = contatos_ja_no_hubspot([c["email"] for c in candidatos])
+
+        for c in candidatos:
+            if enviados >= lote:
+                break
+            if ja_no_hub and c["email"] in ja_no_hub:
+                _ignorar(estado, "contato_ja_no_hubspot")
                 continue
             try:
                 resultado = processar_contato(c, gmail, estado, cache)
@@ -620,12 +670,10 @@ def executar_automacao_apollo(limite_lote=None):
                 break
             if resultado == "enviado":
                 enviados += 1
-        pagina += 1
 
-    resumo = {"enviados": enviados, "paginas": pagina - 1, "motivos": estado["motivos"]}
+    resumo = {"enviados": enviados, "paginas": paginas_lidas, "motivos": estado["motivos"]}
     print(f"Finalizado: {resumo}")
     return resumo
-
 
 if __name__ == "__main__":
     executar_automacao_apollo()
