@@ -506,19 +506,25 @@ def obter_ou_criar_empresa(cache, nome, dominio):
     return cache[chave]
 
 
+def _ignorar(estado, motivo):
+    """Conta o motivo do descarte para aparecer no resumo da execução."""
+    estado["motivos"][motivo] = estado["motivos"].get(motivo, 0) + 1
+    return "ignorado"
+
+
 def processar_contato(c, gmail, estado, cache):
     """Retorna 'enviado', 'ignorado', 'falhou' ou 'parar'."""
     if buscar_contato_hubspot_id(c["email"]):
-        return "ignorado"
+        return _ignorar(estado, "contato_ja_no_hubspot")
 
     dominio = c["dominio"]
     if dominio in DOMINIOS_GENERICOS:
-        return "ignorado"
+        return _ignorar(estado, "dominio_generico")
     chave_existente = f"existente:{dominio}"
     if chave_existente not in cache:
         cache[chave_existente] = buscar_empresa_hubspot_id(dominio) is not None
     if cache[chave_existente]:
-        return "ignorado"
+        return _ignorar(estado, "empresa_ja_no_hubspot")
 
     if tempo_esgotado(estado):
         return "parar"
@@ -584,7 +590,7 @@ def executar_automacao_apollo(limite_lote=None):
     lote = limite_lote or LOTE_POR_EXECUCAO
 
     gmail = criar_servico_gmail()
-    estado = {"inicio": time.monotonic(), "ultimo_envio": None, "enviados": 0}
+    estado = {"inicio": time.monotonic(), "ultimo_envio": None, "enviados": 0, "motivos": {}}
     cache = {}
     enviados = 0
     pagina = 1
@@ -599,6 +605,9 @@ def executar_automacao_apollo(limite_lote=None):
                 break
             c = normalizar_contato_apollo(bruto)
             if not c:
+                estado["motivos"]["sem_email_valido_ou_excluido"] = (
+                    estado["motivos"].get("sem_email_valido_ou_excluido", 0) + 1
+                )
                 continue
             try:
                 resultado = processar_contato(c, gmail, estado, cache)
@@ -613,7 +622,7 @@ def executar_automacao_apollo(limite_lote=None):
                 enviados += 1
         pagina += 1
 
-    resumo = {"enviados": enviados, "paginas": pagina - 1}
+    resumo = {"enviados": enviados, "paginas": pagina - 1, "motivos": estado["motivos"]}
     print(f"Finalizado: {resumo}")
     return resumo
 
