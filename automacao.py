@@ -506,6 +506,65 @@ def obter_ou_criar_empresa(cache, nome, dominio):
     return cache[chave]
 
 
+_PALAVRAS_IGNORADAS = {"company", "companhia", "grupo", "group", "brasil", "brazil",
+                       "limited", "ltda", "the", "holding", "empresa"}
+
+
+def raiz_dominio(dominio):
+    """'rh.pagbank.com.br' -> 'pagbank'. Ignora subdomínios e sufixos como .com.br."""
+    partes = [p for p in (dominio or "").lower().strip().split(".") if p]
+    if len(partes) >= 3 and len(partes[-1]) == 2 and partes[-2] in ("com", "gov", "edu", "org", "net", "co"):
+        return partes[-3]
+    return partes[-2] if len(partes) >= 2 else (partes[0] if partes else "")
+
+
+def _primeira_palavra(nome):
+    for palavra in _normalizar_texto(nome).split():
+        if len(palavra) >= 4 and palavra not in _PALAVRAS_IGNORADAS:
+            return palavra
+    return ""
+
+
+def empresa_ja_existe(nome, dominio, cache):
+    """
+    True se já existe empresa no HubSpot com a mesma raiz de domínio OU com a mesma
+    primeira palavra do nome. Na falha da consulta, responde True (não envia).
+    """
+    chave = f"empresa-existe:{dominio}"
+    if chave in cache:
+        return cache[chave]
+
+    raiz = raiz_dominio(dominio)
+    palavra = _primeira_palavra(nome) or raiz
+    encontrou = False
+    try:
+        buscas = [
+            ("domain", raiz, lambda r: raiz_dominio((r.get("properties") or {}).get("domain") or "") == raiz),
+            ("name", palavra, lambda r: palavra in _normalizar_texto((r.get("properties") or {}).get("name") or "")),
+        ]
+        for propriedade, valor, confere in buscas:
+            if not valor:
+                continue
+            res = hubspot_request("POST", f"{HUBSPOT_BASE}/crm/v3/objects/companies/search", json={
+                "filterGroups": [{"filters": [
+                    {"propertyName": propriedade, "operator": "CONTAINS_TOKEN", "value": valor}
+                ]}],
+                "properties": ["domain", "name"],
+                "limit": 20,
+            })
+            if res.status_code != 200:
+                raise RuntimeError(f"busca de empresa retornou [{res.status_code}]")
+            if any(confere(r) for r in res.json().get("results", [])):
+                encontrou = True
+                break
+    except Exception as e:
+        print(f"HubSpot: não foi possível verificar a empresa '{nome}' ({e}). Contato não será enviado.")
+        encontrou = True
+
+    cache[chave] = encontrou
+    return encontrou
+
+
 def _ignorar(estado, motivo):
     """Conta o motivo do descarte para aparecer no resumo da execução."""
     estado["motivos"][motivo] = estado["motivos"].get(motivo, 0) + 1
@@ -520,10 +579,7 @@ def processar_contato(c, gmail, estado, cache):
     dominio = c["dominio"]
     if dominio in DOMINIOS_GENERICOS:
         return _ignorar(estado, "dominio_generico")
-    chave_existente = f"existente:{dominio}"
-    if chave_existente not in cache:
-        cache[chave_existente] = buscar_empresa_hubspot_id(dominio) is not None
-    if cache[chave_existente]:
+    if empresa_ja_existe(c["empresa"], dominio, cache):
         return _ignorar(estado, "empresa_ja_no_hubspot")
 
     if tempo_esgotado(estado):
