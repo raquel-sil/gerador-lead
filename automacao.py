@@ -15,7 +15,7 @@ from gmail_sender import classificar_erro, criar_servico_gmail, enviar_email_gma
 
 HUBSPOT_ACCESS_TOKEN = os.getenv("HUBSPOT_ACCESS_TOKEN")
 APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
-APOLLO_LABEL_ID = os.getenv("APOLLO_LABEL_ID")  # opcional: se definido, usa só essa lista
+APOLLO_LABEL_ID = os.getenv("APOLLO_LABEL_ID") 
 JOEL_OWNER_ID = os.getenv("JOEL_OWNER_ID", "90392568")
 JOEL_EMAIL_ADDRESS = os.getenv("JOEL_EMAIL_ADDRESS", "joel@startrh.io")
 
